@@ -377,6 +377,13 @@ export class NostrService implements NostriaService {
       const accounts = await this.getAccountsFromStorage();
 
       if (accounts.length === 0) {
+        // Try auto-login via NIP-07 extension peek before showing login UI.
+        if (await this.tryAutoLoginViaPeek()) {
+          this.accountsInitialized = true;
+          clearTimeout(safetyTimeout);
+          return;
+        }
+
         // Show success animation instead of waiting
         this.appState.showSuccess.set(false);
         this.initialized.set(true);
@@ -435,6 +442,10 @@ export class NostrService implements NostriaService {
 
       // If no account, finish the loading.
       if (!account) {
+        if (await this.tryAutoLoginViaPeek()) {
+          clearTimeout(safetyTimeout);
+          return;
+        }
         // Show success animation instead of waiting
         this.appState.showSuccess.set(false);
         this.initialized.set(true);
@@ -457,6 +468,34 @@ export class NostrService implements NostriaService {
       }
       this.accountsInitialized = true;
     }
+  }
+
+  /**
+   * Try silent auto-login via the NIP-07 extension's peekPublicKey() method.
+   * Returns true and calls setAccount() if a pubkey is returned, false otherwise.
+   * peekPublicKey() is a non-standard extension that returns the pubkey without
+   * prompting the user, only if the user previously enabled auto-login.
+   */
+  private async tryAutoLoginViaPeek(): Promise<boolean> {
+    try {
+      const nostr = window.nostr as any;
+      const peekPubkey = await nostr?.peekPublicKey?.();
+      if (peekPubkey && typeof peekPubkey === 'string') {
+        this.logger.info('[NostrService] Auto-login via peekPublicKey');
+        const autoLoginUser: NostrUser = {
+          pubkey: peekPubkey,
+          name: this.utilities.getTruncatedNpub(peekPubkey),
+          source: 'extension',
+          lastUsed: Date.now(),
+          hasActivated: true,
+        };
+        await this.setAccount(autoLoginUser);
+        return true;
+      }
+    } catch (e) {
+      this.logger.debug('[NostrService] peekPublicKey not available or failed', e);
+    }
+    return false;
   }
 
   /**
